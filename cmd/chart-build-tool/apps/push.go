@@ -20,18 +20,21 @@ func NewPushCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "push",
 		Short: "Push chart to chart registry",
-		Long: `
+		Example: `
 Example:
 	chart-build-tool push --username <username> --password <password> './build/*.tgz' https://charts.example.com
 
 	chart-build-tool push --username <username> --password <password> './build/*.tgz' oci://registry.example.com/charts
 		`,
-		Args: cobra.ExactArgs(2),
+		Args: cobra.MinimumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, os.Kill)
 			defer cancel()
-			src, dest := args[0], args[1]
-			return Push(ctx, src, dest, options)
+			if len(args) < 2 {
+				return fmt.Errorf("not enough arguments")
+			}
+			srcs, dest := args[:len(args)-1], args[len(args)-1]
+			return Push(ctx, srcs, dest, options)
 		},
 	}
 	cmd.Flags().StringVarP(&options.Username, "username", "u", "", "Username for registry")
@@ -44,8 +47,20 @@ type PushOptions struct {
 	Password string
 }
 
-func Push(ctx context.Context, src string, dest string, options PushOptions) error {
-	files, err := filepath.Glob(src)
+func Globs(src []string) ([]string, error) {
+	var files []string
+	for _, s := range src {
+		matches, err := filepath.Glob(s)
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, matches...)
+	}
+	return files, nil
+}
+
+func Push(ctx context.Context, srcs []string, dest string, options PushOptions) error {
+	files, err := Globs(srcs)
 	if err != nil {
 		return err
 	}
