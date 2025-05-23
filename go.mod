@@ -3,6 +3,7 @@ module xiaoshiai.cn/build-tools
 go 1.24.1
 
 require (
+	github.com/bluekeyes/go-gitdiff v0.8.1
 	github.com/go-openapi/spec v0.21.0
 	github.com/mitchellh/copystructure v1.2.0
 	github.com/spf13/cobra v1.9.1

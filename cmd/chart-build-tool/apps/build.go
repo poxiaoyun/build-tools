@@ -1,6 +1,7 @@
 package apps
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	gitdiff "github.com/bluekeyes/go-gitdiff/gitdiff"
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
 	"helm.sh/helm/v3/pkg/chart"
@@ -40,10 +42,6 @@ func NewBuilCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, os.Kill)
 			defer cancel()
-			go func() {
-				<-ctx.Done()
-				os.Exit(1)
-			}()
 			return Build(ctx, args, options)
 		},
 	}
@@ -280,11 +278,19 @@ func BuildChartFromSource(ctx context.Context, chartdir string, sourcefile strin
 			return nil
 		}
 		// merge
-		log.Printf("Merging %s ...", path)
 		filecontent, err := fs.ReadFile(fsys, path)
 		if err != nil {
 			return err
 		}
+		if strings.HasSuffix(path, ".patch") {
+			log.Printf("Apply patching %s ...", path)
+			if err := PatchFiles(rawfilesmap, filecontent); err != nil {
+				log.Printf("Failed to apply patch %s: %v", path, err)
+				return err
+			}
+			return nil
+		}
+		log.Printf("Merging %s ...", path)
 		// only allow merge at root level
 		if !strings.Contains(path, "/") {
 			ext := filepath.Ext(path)
@@ -312,6 +318,27 @@ func BuildChartFromSource(ctx context.Context, chartdir string, sourcefile strin
 		rawfiles = append(rawfiles, &loader.BufferedFile{Name: name, Data: data})
 	}
 	return loader.LoadFiles(rawfiles)
+}
+
+func PatchFiles(files map[string][]byte, patch []byte) error {
+	diffs, _, err := gitdiff.Parse(bytes.NewReader(patch))
+	if err != nil {
+		return err
+	}
+	for _, diff := range diffs {
+		targetfile := diff.NewName
+		data, ok := files[targetfile]
+		if !ok {
+			return fmt.Errorf("file %s not found", targetfile)
+		}
+		result := bytes.NewBuffer(nil)
+		log.Printf("Applying patch to %s", targetfile)
+		if err := gitdiff.Apply(result, bytes.NewReader(data), diff); err != nil {
+			return fmt.Errorf("apply patch to %s failed: %v", targetfile, err)
+		}
+		files[targetfile] = result.Bytes()
+	}
+	return nil
 }
 
 func Exists(path string) bool {
