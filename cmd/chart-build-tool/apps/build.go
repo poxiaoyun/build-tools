@@ -52,6 +52,7 @@ func NewBuilCommand() *cobra.Command {
 
 type BuildOptions struct {
 	OutPut   string
+	Type     string // Type of the chart, e.g. "application", "library"
 	Replaces []string
 }
 
@@ -80,14 +81,17 @@ func Build(ctx context.Context, pathes []string, options BuildOptions) error {
 		fmt.Print(err.Error())
 		os.Exit(1)
 	}
+
+	os.MkdirAll(options.OutPut, 0o755)
+
 	for _, chartpath := range allcharts {
 		log.Printf("Processing %s", chartpath)
 		// build chart
-		built, err := BuildChart(ctx, chartpath, options.OutPut, replaces)
+		built, err := BuildChart(ctx, chartpath, options, replaces)
 		if err != nil {
 			return err
 		}
-		allcharts = append(allcharts, built)
+		_ = built
 	}
 	return nil
 }
@@ -131,11 +135,11 @@ func WalkChart(dir string, fn func(string) error) error {
 	})
 }
 
-func BuildChart(ctx context.Context, dir string, output string, replaces []ValueReplace) (string, error) {
+func BuildChart(ctx context.Context, dir string, opts BuildOptions, replaces []ValueReplace) (string, error) {
 	sourcefile := filepath.Join(dir, SourceFile)
 	var chart *chart.Chart
 	if Exists(sourcefile) {
-		newchart, err := BuildChartFromSource(ctx, dir, sourcefile, output)
+		newchart, err := BuildChartFromSource(ctx, dir, sourcefile, opts.OutPut)
 		if err != nil {
 			return "", err
 		}
@@ -153,12 +157,12 @@ func BuildChart(ctx context.Context, dir string, output string, replaces []Value
 		return "", err
 	}
 	log.Printf("Building dependencies for %s", chart.Name())
-	chart, err = BuildDependencies(chart, output)
+	chart, err = BuildDependencies(chart, opts.OutPut)
 	if err != nil {
 		return "", err
 	}
 	log.Printf("Packaging %s", chart.Name())
-	tgzfile, err := chartutil.Save(chart, output)
+	tgzfile, err := chartutil.Save(chart, opts.OutPut)
 	if err != nil {
 		return "", err
 	}
