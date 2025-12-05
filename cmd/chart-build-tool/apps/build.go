@@ -176,13 +176,16 @@ func BuildChart(ctx context.Context, dir string, opts BuildOptions, replaces []V
 	if err != nil {
 		return "", err
 	}
+
+	chartOutputDir := filepath.Join(opts.OutPut, chart.Name())
+
 	Printf("Building dependencies for %s", chart.Name())
-	chart, err = BuildDependencies(chart, opts.OutPut)
+	chart, err = BuildDependencies(chart, chartOutputDir)
 	if err != nil {
 		return "", err
 	}
 	Printf("Packaging %s", chart.Name())
-	tgzfile, err := chartutil.Save(chart, opts.OutPut)
+	tgzfile, err := chartutil.Save(chart, chartOutputDir)
 	if err != nil {
 		return "", err
 	}
