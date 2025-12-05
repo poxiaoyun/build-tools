@@ -13,7 +13,7 @@ func main() {
 		Use:   "chart-build-tool",
 		Short: "Build and push helm chart",
 	}
-	cmd.AddCommand(apps.NewBuilCommand())
+	cmd.AddCommand(apps.NewBuildCommand())
 	cmd.AddCommand(apps.NewPushCommand())
 	cmd.AddCommand(apps.NewSchemaGenerateCommand())
 	if err := cmd.Execute(); err != nil {

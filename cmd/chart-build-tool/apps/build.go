@@ -27,7 +27,7 @@ import (
 	"helm.sh/helm/v3/pkg/repo"
 )
 
-func NewBuilCommand() *cobra.Command {
+func NewBuildCommand() *cobra.Command {
 	options := BuildOptions{
 		OutPut: "build",
 	}
@@ -50,6 +50,8 @@ func NewBuilCommand() *cobra.Command {
 	return cmd
 }
 
+var Printf = log.Printf
+
 type BuildOptions struct {
 	OutPut   string
 	Type     string // Type of the chart, e.g. "application", "library"
@@ -66,7 +68,7 @@ func Build(ctx context.Context, pathes []string, options BuildOptions) error {
 	for _, replace := range options.Replaces {
 		parts := strings.Split(replace, "=")
 		if len(parts) != 2 {
-			return fmt.Errorf("Invalid registry override: %s", replace)
+			return fmt.Errorf("invalid registry override: %s", replace)
 		}
 		replaces = append(replaces, ValueReplace{Old: parts[0], New: parts[1]})
 	}
@@ -74,7 +76,7 @@ func Build(ctx context.Context, pathes []string, options BuildOptions) error {
 	allcharts := []string{}
 	doprocss := func(path string) error {
 		allcharts = append(allcharts, path)
-		log.Printf("Found chart %s", path)
+		Printf("Found chart %s", path)
 		return nil
 	}
 	if err := WalkAllCharts(pathes, doprocss); err != nil {
@@ -85,7 +87,7 @@ func Build(ctx context.Context, pathes []string, options BuildOptions) error {
 	os.MkdirAll(options.OutPut, 0o755)
 
 	for _, chartpath := range allcharts {
-		log.Printf("Processing %s", chartpath)
+		Printf("Processing %s", chartpath)
 		// build chart
 		built, err := BuildChart(ctx, chartpath, options, replaces)
 		if err != nil {
@@ -103,7 +105,16 @@ func WalkAllCharts(dirs []string, fn func(string) error) error {
 			return err
 		}
 		for _, match := range matches {
-			if err := WalkChart(match, fn); err != nil {
+			// create an fs.FS rooted at the matched path and call WalkChart with
+			// a wrapper that converts relative fs paths to absolute filesystem paths
+			wrapped := func(p string) error {
+				full := match
+				if p != "." {
+					full = filepath.Join(match, p)
+				}
+				return fn(full)
+			}
+			if err := WalkChart(os.DirFS(match), wrapped); err != nil {
 				return err
 			}
 		}
@@ -111,24 +122,32 @@ func WalkAllCharts(dirs []string, fn func(string) error) error {
 	return nil
 }
 
-func WalkChart(dir string, fn func(string) error) error {
-	return filepath.Walk(dir, func(path string, info fs.FileInfo, err error) error {
+func WalkChart(fsys fs.FS, fn func(string) error) error {
+	return fs.WalkDir(fsys, ".", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if !info.IsDir() {
+		if !d.IsDir() {
 			return nil
 		}
-		if strings.HasPrefix(info.Name(), ".") {
-			return filepath.SkipDir
+		if strings.HasPrefix(d.Name(), ".") {
+			return fs.SkipDir
 		}
 		chartfiles := []string{"Chart.yaml", "source.yaml"}
 		for _, chartfile := range chartfiles {
-			if Exists(filepath.Join(path, chartfile)) {
+			var p string
+			if path == "." {
+				p = chartfile
+			} else {
+				p = path + "/" + chartfile
+			}
+			if _, statErr := fs.Stat(fsys, p); statErr == nil {
+				// pass the relative path within fs to caller; caller may
+				// translate it to an absolute filesystem path if needed
 				if err := fn(path); err != nil {
 					return err
 				}
-				return filepath.SkipDir
+				return fs.SkipDir
 			}
 		}
 		return nil
@@ -156,17 +175,17 @@ func BuildChart(ctx context.Context, dir string, opts BuildOptions, replaces []V
 	if err != nil {
 		return "", err
 	}
-	log.Printf("Building dependencies for %s", chart.Name())
+	Printf("Building dependencies for %s", chart.Name())
 	chart, err = BuildDependencies(chart, opts.OutPut)
 	if err != nil {
 		return "", err
 	}
-	log.Printf("Packaging %s", chart.Name())
+	Printf("Packaging %s", chart.Name())
 	tgzfile, err := chartutil.Save(chart, opts.OutPut)
 	if err != nil {
 		return "", err
 	}
-	log.Printf("Chart %s is saved to %s", chart.Name(), tgzfile)
+	Printf("Chart %s is saved to %s", chart.Name(), tgzfile)
 	return tgzfile, nil
 }
 
@@ -196,8 +215,8 @@ func OverrideValuesFile(ctx context.Context, file *chart.File, replaces []ValueR
 					if !strings.Contains(val, replace.Old) {
 						continue
 					}
-					newval := strings.Replace(val, replace.Old, replace.New, -1)
-					log.Printf("Overrided %s with %s at %s", val, newval, jsonpath)
+					newval := strings.ReplaceAll(val, replace.Old, replace.New, )
+					Printf("Overrided %s with %s at %s", val, newval, jsonpath)
 					val = newval
 				}
 			}
@@ -254,7 +273,7 @@ func BuildChartFromSource(ctx context.Context, chartdir string, sourcefile strin
 	if src.Name == "" {
 		return nil, fmt.Errorf("%s does't have name", sourcefile)
 	}
-	log.Printf("Loading chart %s:%s from %s", src.Name, src.Version, src.Repository)
+	Printf("Loading chart %s:%s from %s", src.Name, src.Version, src.Repository)
 	rawfiles, err := LoadChart(ctx, src.Repository, src.Name, src.Version)
 	if err != nil {
 		return nil, err
@@ -263,7 +282,7 @@ func BuildChartFromSource(ctx context.Context, chartdir string, sourcefile strin
 	if err != nil {
 		return nil, err
 	}
-	log.Printf("Saving chart %s", chart.Name())
+	Printf("Saving chart %s", chart.Name())
 	if err := chartutil.SaveDir(chart, output); err != nil {
 		return nil, err
 	}
@@ -271,7 +290,7 @@ func BuildChartFromSource(ctx context.Context, chartdir string, sourcefile strin
 	for _, rawfile := range rawfiles {
 		rawfilesmap[rawfile.Name] = rawfile.Data
 	}
-	log.Printf("Merging files...")
+	Printf("Merging files...")
 	// merge all files in this directory into the chart
 	fsys := os.DirFS(chartdir)
 	if err := fs.WalkDir(fsys, ".", func(path string, d fs.DirEntry, err error) error {
@@ -287,14 +306,14 @@ func BuildChartFromSource(ctx context.Context, chartdir string, sourcefile strin
 			return err
 		}
 		if strings.HasSuffix(path, ".patch") {
-			log.Printf("Apply patching %s ...", path)
+			Printf("Apply patching %s ...", path)
 			if err := PatchFiles(rawfilesmap, filecontent); err != nil {
-				log.Printf("Failed to apply patch %s: %v", path, err)
+				Printf("Failed to apply patch %s: %v", path, err)
 				return err
 			}
 			return nil
 		}
-		log.Printf("Merging %s ...", path)
+		Printf("Merging %s ...", path)
 		// only allow merge at root level
 		if !strings.Contains(path, "/") {
 			ext := filepath.Ext(path)
@@ -336,7 +355,7 @@ func PatchFiles(files map[string][]byte, patch []byte) error {
 			return fmt.Errorf("file %s not found", targetfile)
 		}
 		result := bytes.NewBuffer(nil)
-		log.Printf("Applying patch to %s", targetfile)
+		Printf("Applying patch to %s", targetfile)
 		if err := gitdiff.Apply(result, bytes.NewReader(data), diff); err != nil {
 			return fmt.Errorf("apply patch to %s failed: %v", targetfile, err)
 		}
@@ -442,7 +461,12 @@ func MergeYamlNode(jsonpath string, src, patch *yaml.Node) (*yaml.Node, error) {
 				if err != nil {
 					return nil, err
 				}
-				srcval = newval
+				for j := 0; j < len(src.Content); j += 2 {
+					if src.Content[j].Value == key.Value {
+						src.Content[j+1] = newval
+						break
+					}
+				}
 			}
 		}
 		return src, nil

@@ -347,7 +347,7 @@ func HiddenOptionHandler(schema *openapi.Schema, sec Section) {
 // OrderOptionHandler handle properties order
 // Ref: https://github.com/go-openapi/spec/blob/1005cfb91978aa416cfc5a1251b790126390788a/properties.go#L44
 func OrderOptionHandler(schema *openapi.Schema, sec Section) {
-	schema.Extensions["x-order"] = formatYamlStr(sec.Value)
+	schema.ExtraProps["x-order"] = formatYamlStr(sec.Value)
 }
 
 func TitleOptionHandler(schema *openapi.Schema, sec Section) {
@@ -402,11 +402,11 @@ func SetSchemaProp(schema *openapi.Schema, k string, v any) {
 			}
 		}
 	case "items":
-		items := openapi.SchemaOrArray{}
-		if err := json.Unmarshal([]byte(anyToString(v)), &items); err != nil {
+		item := &openapi.Schema{}
+		if err := json.Unmarshal([]byte(anyToString(v)), item); err != nil {
 			fmt.Printf("Unable decode schema items values: %s error: %s\n", v, err.Error())
 		}
-		schema.Items = items
+		schema.Items = item
 	default:
 		if schema.ExtraProps == nil {
 			schema.ExtraProps = map[string]any{}

@@ -48,10 +48,8 @@ func nodeSchema(node *yaml.Node, keycomment string) *openapi.Schema {
 			}
 			schemas = append(schemas, *itemProperty)
 		}
-		if len(schemas) == 1 {
-			schema.Items = openapi.SchemaOrArray{schemas[0]}
-		} else {
-			schema.Items = openapi.SchemaOrArray(schemas)
+		if len(schemas) > 1 {
+			schema.Items = &schemas[0]
 		}
 	case yaml.ScalarNode:
 		switch node.Tag {

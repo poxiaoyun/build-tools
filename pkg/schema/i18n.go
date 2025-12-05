@@ -27,9 +27,7 @@ func PurgeSchema(schema *openapi.Schema) {
 		}
 	}
 	schema.Properties = purgedProperties
-	for i := range schema.Items {
-		PurgeSchema(&schema.Items[i])
-	}
+	PurgeSchema(schema.Items)
 }
 
 func CompleteI18n(schema openapi.Schema) (*I18nSchema, error) {
@@ -38,14 +36,11 @@ func CompleteI18n(schema openapi.Schema) (*I18nSchema, error) {
 		return nil, err
 	}
 
-	items := make([]I18nSchema, len(i18nschemas.Orignal.Items))
-	for i := range i18nschemas.Orignal.Items {
-		subi18nschemas, err := CompleteI18n(i18nschemas.Orignal.Items[i])
-		if err != nil {
-			return nil, err
-		}
-		items[i] = *subi18nschemas
+	subi18nschemas, err := CompleteI18n(*i18nschemas.Orignal.Items)
+	if err != nil {
+		return nil, err
 	}
+
 	properties := make([]I18nSchema, len(i18nschemas.Orignal.Properties))
 	for i, item := range i18nschemas.Orignal.Properties {
 		subi18nschemas, err := CompleteI18n(item.Schema)
@@ -56,24 +51,20 @@ func CompleteI18n(schema openapi.Schema) (*I18nSchema, error) {
 	}
 
 	// must make  i18nschemas.Orignal's properties updated fully before deepcopy it.
-	for i, subi18nschemas := range items {
-		i18nschemas.Orignal.Items[i] = *subi18nschemas.Orignal
-	}
+	i18nschemas.Orignal.Items = subi18nschemas.Orignal
 	for i, subi18nschemas := range properties {
 		i18nschemas.Orignal.Properties[i].Schema = *subi18nschemas.Orignal
 	}
 
-	for i, subi18nschemas := range items {
-		for locale, subi18nschema := range subi18nschemas.Locales {
-			if _, ok := i18nschemas.Locales[locale]; !ok {
-				i18nschemas.Locales[locale] = DeepCopySchema(i18nschemas.Orignal)
-			}
-			i18nschemas.Locales[locale].Items[i] = *subi18nschema
+	for locale, subi18nschema := range subi18nschemas.Locales {
+		if _, ok := i18nschemas.Locales[locale]; !ok {
+			i18nschemas.Locales[locale] = DeepCopySchema(i18nschemas.Orignal)
 		}
-		for locale := range i18nschemas.Locales {
-			if _, ok := subi18nschemas.Locales[locale]; !ok {
-				i18nschemas.Locales[locale].Items[i] = *subi18nschemas.Orignal
-			}
+		i18nschemas.Locales[locale].Items = subi18nschema
+	}
+	for locale := range i18nschemas.Locales {
+		if _, ok := subi18nschemas.Locales[locale]; !ok {
+			i18nschemas.Locales[locale] = subi18nschemas.Orignal
 		}
 	}
 	for i, subi18nschemas := range properties {
