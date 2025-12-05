@@ -130,9 +130,6 @@ func WalkChart(fsys fs.FS, fn func(string) error) error {
 		if !d.IsDir() {
 			return nil
 		}
-		if strings.HasPrefix(d.Name(), ".") {
-			return fs.SkipDir
-		}
 		chartfiles := []string{"Chart.yaml", "source.yaml"}
 		for _, chartfile := range chartfiles {
 			var p string
