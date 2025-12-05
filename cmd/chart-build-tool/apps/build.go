@@ -1,13 +1,17 @@
 package apps
 
 import (
+	"archive/tar"
+	"archive/zip"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"io/fs"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -212,7 +216,7 @@ func OverrideValuesFile(ctx context.Context, file *chart.File, replaces []ValueR
 					if !strings.Contains(val, replace.Old) {
 						continue
 					}
-					newval := strings.ReplaceAll(val, replace.Old, replace.New, )
+					newval := strings.ReplaceAll(val, replace.Old, replace.New)
 					Printf("Overrided %s with %s at %s", val, newval, jsonpath)
 					val = newval
 				}
@@ -252,6 +256,8 @@ type ChartSource struct {
 	Name       string `json:"name,omitempty"`
 	Version    string `json:"version,omitempty"`
 	Repository string `json:"repository,omitempty"`
+	URL        string `json:"url,omitempty"`
+	Path       string `json:"path,omitempty"`
 }
 
 func BuildChartFromSource(ctx context.Context, chartdir string, sourcefile string, output string) (*chart.Chart, error) {
@@ -264,22 +270,30 @@ func BuildChartFromSource(ctx context.Context, chartdir string, sourcefile strin
 	if err := yaml.Unmarshal(bts, src); err != nil {
 		return nil, err
 	}
-	if src.Repository == "" {
-		return nil, fmt.Errorf("%s does't have repository", sourcefile)
+	var rawfiles []*loader.BufferedFile
+	if src.Repository != "" && src.Name != "" {
+		Printf("Loading chart %s:%s from %s", src.Name, src.Version, src.Repository)
+		chartrawfiles, err := LoadChart(ctx, src.Repository, src.Name, src.Version)
+		if err != nil {
+			return nil, err
+		}
+		rawfiles = chartrawfiles
+	} else if src.URL != "" {
+		Printf("Loading chart from URL %s", src.URL)
+		chartrawfiles, err := LoadChartFromURL(ctx, src.URL, src.Path)
+		if err != nil {
+			return nil, err
+		}
+		rawfiles = chartrawfiles
+	} else {
+		return nil, fmt.Errorf("%s does't have repository name or url", sourcefile)
 	}
-	if src.Name == "" {
-		return nil, fmt.Errorf("%s does't have name", sourcefile)
-	}
-	Printf("Loading chart %s:%s from %s", src.Name, src.Version, src.Repository)
-	rawfiles, err := LoadChart(ctx, src.Repository, src.Name, src.Version)
-	if err != nil {
-		return nil, err
-	}
+
 	chart, err := loader.LoadFiles(rawfiles)
 	if err != nil {
 		return nil, err
 	}
-	Printf("Saving chart %s", chart.Name())
+	Printf("Saving chart %s to %s", chart.Name(), output)
 	if err := chartutil.SaveDir(chart, output); err != nil {
 		return nil, err
 	}
@@ -338,6 +352,107 @@ func BuildChartFromSource(ctx context.Context, chartdir string, sourcefile strin
 		rawfiles = append(rawfiles, &loader.BufferedFile{Name: name, Data: data})
 	}
 	return loader.LoadFiles(rawfiles)
+}
+
+func LoadChartFromURL(ctx context.Context, url string, subPath string) ([]*loader.BufferedFile, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("failed to download chart from %s: %s", url, resp.Status)
+	}
+	// is zip ?
+	if strings.HasSuffix(url, ".zip") {
+		raw, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, err
+		}
+		return Unzip(ctx, raw, subPath)
+	}
+	// is tar.gz ?
+	if strings.HasSuffix(url, ".tar.gz") || strings.HasSuffix(url, ".tgz") {
+		return UnTarGz(resp.Body, subPath)
+	}
+	return nil, fmt.Errorf("unsupported file format from %s", url)
+}
+
+func Unzip(ctx context.Context, raw []byte, subpath string) ([]*loader.BufferedFile, error) {
+	r := bytes.NewReader(raw)
+	zipr, err := zip.NewReader(r, r.Size())
+	if err != nil {
+		return nil, err
+	}
+
+	if subpath != "" && !strings.HasSuffix(subpath, "/") {
+		subpath += "/"
+	}
+
+	var chartfiles []*loader.BufferedFile
+	for _, file := range zipr.File {
+		if !strings.HasPrefix(file.Name, subpath) {
+			continue
+		}
+		{
+			filename := strings.TrimPrefix(file.Name, subpath)
+			if file.FileInfo().IsDir() {
+				continue
+			}
+			rc, err := file.Open()
+			if err != nil {
+				return nil, err
+			}
+			defer rc.Close()
+
+			data, err := io.ReadAll(rc)
+			if err != nil {
+				return nil, err
+			}
+			chartfiles = append(chartfiles, &loader.BufferedFile{Name: filename, Data: data})
+		}
+	}
+	return chartfiles, nil
+}
+
+func UnTarGz(r io.Reader, subpath string) ([]*loader.BufferedFile, error) {
+	if subpath != "" && !strings.HasSuffix(subpath, "/") {
+		subpath += "/"
+	}
+	gz, err := gzip.NewReader(r)
+	if err != nil {
+		return nil, err
+	}
+	defer gz.Close()
+
+	var chartfiles []*loader.BufferedFile
+	tr := tar.NewReader(gz)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		if !strings.HasPrefix(hdr.Name, subpath) {
+			continue
+		}
+		filename := strings.TrimPrefix(hdr.Name, subpath)
+		if hdr.FileInfo().IsDir() {
+			continue
+		}
+		data, err := io.ReadAll(tr)
+		if err != nil {
+			return nil, err
+		}
+		chartfiles = append(chartfiles, &loader.BufferedFile{Name: filename, Data: data})
+	}
+	return chartfiles, nil
 }
 
 func PatchFiles(files map[string][]byte, patch []byte) error {
